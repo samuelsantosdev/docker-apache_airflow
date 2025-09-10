@@ -1,0 +1,208 @@
+services:
+  airflow:
+    image: apache/airflow:2.1.0
+    container_name: airflow
+    command: bash -c "airflow db init && airflow scheduler -D && airflow webserver"
+    environment:
+      - HADOOP_HOME=/opt/hadoop
+      - AIRFLOW__CORE__SQL_CREATE_ENGINE_ON_STARTUP=True
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__SQL_ALCHEMY_TIMEOUT=10
+      - AIRFLOW__LOAD_EXAMPLES=False
+      - _AIRFLOW_WWW_USER_CREATE=True
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=admin
+      - AIRFLOW__CORE__LOAD_EXAMPLES=True
+      - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
+    volumes:
+      - ./dags:/opt/airflow/dags:rw 
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - cluster_net
+
+  postgres:
+    container_name: postgres
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data:rw
+    ports:
+      - "5432:5432"
+    networks:
+      - cluster_net
+
+  namenode:
+      image: apache/hadoop:3
+      privileged: true
+      container_name: namenode
+      user: root
+      command: bash -c "if [ ! -d /tmp/hadoop-root/dfs/name/current ]; then echo Y | hdfs namenode -format; fi && hdfs namenode"
+      ports:
+        - 9870:9870
+      env_file:
+        - env
+      volumes:
+        - hadoop_namenode:/tmp/hadoop-root/dfs/name:rw
+      networks:
+        - cluster_net
+              
+  datanode1:
+    image: apache/hadoop:3
+    command: ["hdfs", "datanode"]
+    ports:
+      - 9864:9864  # DataNode Web UI
+    deploy:
+      replicas: 1
+    env_file:
+      - env
+    user: root
+    volumes:
+      - hadoop_datanode1:/tmp/hadoop-root/dfs/data:rw
+    depends_on:
+      - namenode
+    networks:
+      - cluster_net
+  
+  datanode2:
+    image: apache/hadoop:3
+    command: ["hdfs", "datanode"]
+    ports:
+      - 9865:9864  # DataNode Web UI
+    env_file:
+      - env
+    user: root
+    volumes:
+      - hadoop_datanode2:/tmp/hadoop-root/dfs/data:rw
+    depends_on:
+      - namenode
+    networks:
+      - cluster_net
+
+  resourcemanager:
+    image: apache/hadoop:3
+    command: ["yarn", "resourcemanager"]
+    user: root
+    privileged: true
+    container_name: resourcemanager
+    hostname: resourcemanager
+    env_file:
+      - env
+    volumes:
+      - hadoop_resourcemanager:/tmp/hadoop-root/dfs/resourcemanager
+    ports:
+      - 8088:8088  # ResourceManager Web UI
+      - 8030:8030  # ResourceManager Scheduler
+      - 8031:8031  # ResourceManager ResourceTracker
+      - 8032:8032  # ResourceManager
+      - 8033:8033  # ResourceManager Admin
+    networks:
+      - cluster_net
+    depends_on:
+      - namenode
+      - datanode1
+      - datanode2
+
+  nodemanager1:
+    image: apache/hadoop:3
+    command: ["yarn", "nodemanager"]
+    user: root
+    ports:
+      - 8042:8042
+    env_file:
+      - env
+    volumes:
+      - hadoop_nodemanager1:/tmp/hadoop-root/dfs/nodemanager
+    networks:
+      - cluster_net
+    depends_on:
+      - resourcemanager
+
+  nodemanager2:
+    image: apache/hadoop:3
+    command: ["yarn", "nodemanager"]
+    user: root
+    ports:
+      - 8043:8042
+    env_file:
+      - env
+    volumes:
+      - hadoop_nodemanager2:/tmp/hadoop-root/dfs/nodemanager
+    networks:
+      - cluster_net
+    depends_on:
+      - resourcemanager
+
+  historyserver:
+    image: infravibe/hadoop:3.3.6
+    platform: linux/amd64
+    hostname: historyserver
+    container_name: historyserver
+    user: root
+    command: bash -c "hdfs dfs -mkdir -p /tmp/hadoop-yarn/staging/history/done_intermediate && hdfs dfs -chmod -R 1777 /tmp && hdfs dfs -mkdir -p /user/history && hdfs dfs -chmod 1777 /user/history && mapred --daemon start historyserver && tail -f /dev/null"
+    volumes:
+      - historyserver:/user/history:rw
+    env_file:
+      - env
+    ports:
+      - 8188:8188  # History Server Web UI
+      - 19888:19888 # MapReduce JobHistory Web UI
+      - 10020:10020 # JobHistory Server
+    depends_on:
+      - namenode
+      - datanode1
+      - datanode2
+      - resourcemanager
+    networks:
+      - cluster_net
+
+  nifi:
+    image: apache/nifi:latest
+    command: sh -c 'bin/nifi.sh run'
+    user: root
+    container_name: nifi
+    hostname: nifi
+    volumes:
+      - nifi_data:/opt/nifi/nifi-current/data:rw
+    ports:
+      - 8443:8443
+      - 52020:52020
+      - 8888:8888
+    environment:
+      - SINGLE_USER_CREDENTIALS_USERNAME=admin
+      - SINGLE_USER_CREDENTIALS_PASSWORD=ctsBtRBKHRAx69EqUghvvgEvjnaLjFEB
+      - NIFI_WEB_HTTP_PORT=8888
+    networks:
+      - cluster_net
+    depends_on:
+      - namenode
+
+networks:
+  cluster_net:
+    driver: bridge
+    attachable: true
+volumes:
+  pgdata:
+    driver: local
+  hadoop_namenode:
+    driver: local
+  hadoop_datanode1:
+    driver: local
+  hadoop_datanode2:
+    driver: local
+  hadoop_resourcemanager:
+    driver: local
+  hadoop_nodemanager1:
+    driver: local
+  hadoop_nodemanager2:
+    driver: local
+  nifi_data:
+    driver: local
+  historyserver:
+    driver: local
