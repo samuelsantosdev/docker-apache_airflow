@@ -1,9 +1,11 @@
 # Hadoop - Airflow - Nifi
 
 ### Requirements
+
 Docker version 27.5.1^
 
 ### Start the project
+
 ```bash
 docker compose up -d
 ```
